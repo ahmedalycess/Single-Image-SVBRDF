@@ -480,22 +480,399 @@ def deprocess_torch(x):
     """Convert from [-1,1] to [0,1]"""
     return (x + 1) / 2
 
+def save_loss_value(values):
+    averaged = np.mean(values)
+    with open(os.path.join(a.output_dir, "losses.txt"), "a") as f:
+            f.write(str(averaged) + "\n")
+            
+def save_images(fetches, output_dir = a.output_dir, step=None):
+    image_dir = os.path.join(output_dir, "images")
+    if not os.path.exists(image_dir):
+        os.makedirs(image_dir)
+
+    filesets = []
+    for i, in_path in enumerate(fetches["paths"]):
+        name, _ = os.path.splitext(os.path.basename(in_path.decode("utf8")))
+        fileset = {"name": name, "step": step}
+        #fetch inputs
+        kind = "inputs"
+        filename = name + "-" + kind + ".png"
+        if step is not None:
+            filename = "%08d-%s" % (step, filename)
+        fileset[kind] = filename
+        out_path = os.path.join(image_dir, filename)
+        contents = fetches[kind][i]
+        with open(out_path, "wb") as f:
+            f.write(contents)
+        #fetch outputs and targets
+        for kind in ["outputs", "targets"]:
+            for idImage in range(a.nbTargets):
+                filename = name + "-" + kind + "-" + str(idImage) + "-.png"
+                if step is not None:
+                    filename = "%08d-%s" % (step, filename)
+                filetsetKey = kind + str(idImage)
+                fileset[filetsetKey] = filename
+                out_path = os.path.join(image_dir, filename)
+                contents = fetches[kind][i * a.nbTargets + idImage]
+                with open(out_path, "wb") as f:
+                    f.write(contents)
+        filesets.append(fileset)
+    return filesets
+
+def append_index(filesets, output_dir = a.output_dir, step=False):
+    index_path = os.path.join(output_dir, "index.html")
+    if os.path.exists(index_path):
+        index = open(index_path, "a")
+    else:
+        mapnames = ["normals", "diffuse", "roughness", "log(specular)"]
+        index = open(index_path, "w")
+        index.write("<html><body><table><tr>")
+        if step:
+            index.write("<th>step</th>")
+        index.write("<th>name</th><th>log(input)</th>")
+        for idImage in range(a.nbTargets):
+            index.write("<th>" + str(mapnames[idImage]) + "</th>")
+        index.write("</tr>")            
+
+    for fileset in filesets:
+        index.write("<tr>")
+
+        if step:
+            index.write("<td>%d</td>" % fileset["step"])
+        index.write("<td>%s targets</td>" % fileset["name"])
+        if a.mode != "eval" : 
+
+            for kind in ["inputs", "targets"]:
+                if kind == "inputs":
+                    index.write("<td><img src='images/%s'></td>" % fileset[kind])
+                elif kind == "targets":
+                    for idImage in range(a.nbTargets):
+                        filetsetKey = kind + str(idImage)
+                        index.write("<td><img src='images/%s'></td>" % fileset[filetsetKey])
+            index.write("</tr>")
+            index.write("<tr>")
+
+        if step:
+            index.write("<td></td>")
+        index.write("<td>outputs</td>")
+        for kind in ["inputs", "outputs"]:
+            if kind == "inputs":
+                index.write("<td><img src='images/%s'></td>" % fileset[kind])
+            elif kind=="outputs":
+                for idImage in range(a.nbTargets):
+                    filetsetKey = kind + str(idImage)
+                    index.write("<td><img src='images/%s'></td>" % fileset[filetsetKey])
+        index.write("</tr>")
+    
+    return index_path
+
+def run_test_from_train(current_step, eval_examples, max_steps, display_fetches_test, model, device):
+    """
+    Run evaluation from training using PyTorch.
+
+    Args:
+        current_step (int): Current training step.
+        eval_examples (DataLoader or iterable): Iterable containing evaluation data.
+        max_steps (int): Maximum number of evaluation steps.
+        ??? is it a dict? display_fetches_test (dict): Predefined structure describing what to fetch (inputs, outputs, etc.).
+        model (torch.nn.Module): Trained PyTorch model.
+        device (torch.device): Device to run the evaluation on (e.g., "cuda" or "cpu").
+    """
+    model.eval()  # Set model to evaluation mode
+    test_output_dir = os.path.join(a.output_dir, f"testStep{current_step}")
+    os.makedirs(test_output_dir, exist_ok=True)
+    
+    index_path = None
+    filesets = []
+
+    # Limit max_steps to the number of available batches
+    max_steps = min(len(eval_examples), max_steps)
+
+    with torch.no_grad():  # Disable gradient computation for evaluation
+        for step, batch in enumerate(eval_examples):
+            if step >= max_steps:
+                break
+
+            try:
+                # Assuming `batch` contains inputs and targets
+                inputs, targets = batch  # Modify if batch structure is different
+                inputs, targets = inputs.to(device), targets.to(device)
+
+                # Get model predictions
+                outputs = model(inputs)
+
+                # Structure results based on display_fetches_test
+                results_test = {
+                    "paths": [f"image_{step}_{i}.png" for i in range(len(inputs))],
+                    "inputs": [input_img.cpu().numpy().tobytes() for input_img in inputs],
+                    "outputs": [output_img.cpu().numpy().tobytes() for output_img in outputs],
+                    "targets": [target_img.cpu().numpy().tobytes() for target_img in targets],
+                }
+
+                # Save images and update index
+                filesets += save_images(results_test, test_output_dir)
+
+            except Exception as e:
+                print(f"Error in run_test_from_train: {e}")
+                continue
+
+    # Generate index HTML for the saved images
+    if filesets:
+        index_path = append_index(filesets, test_output_dir)
+
+    print("wrote index at", index_path)
+
+def reshape_tensor_display(tensor, split_amount, log_albedo=False):
+    """
+    Process a PyTorch tensor by splitting, optionally applying a log operation, stacking, and reshaping.
+
+    Args:
+        tensor (torch.Tensor): Input tensor of shape [batch, 256, 256, channels].
+        split_amount (int): Number of splits along the last dimension (channels).
+        log_albedo (bool): Whether to apply a log operation to certain splits.
+
+    Returns:
+        torch.Tensor: Reshaped tensor.
+    """
+    # Split the tensor along the last dimension (axis=-1 in PyTorch)
+    tensors_list = torch.split(tensor, tensor.size(-1) // split_amount, dim=-1)  # List of Tensors
+
+    # Apply log operation if log_albedo is True
+    if log_albedo:
+        tensors_list[-1] = log_tensor(tensors_list[-1])  # Apply logTensor to the last element
+        tensors_list[1] = log_tensor(tensors_list[1])  # Apply logTensor to the second element
+
+    # Stack the tensors along a new dimension (axis=1)
+    tensors = torch.stack(tensors_list, dim=1)  # Shape: [batch, split_amount, 256, 256, channels/split_amount]
+
+    # Reshape the tensor
+    shape = list(tensors.size())  # Current shape: [batch, split_amount, 256, 256, channels/split_amount]
+    new_shape = [shape[0] * shape[1]] + shape[2:]  # Flatten batch and split_amount dimensions
+    tensors_reshaped = tensors.view(new_shape)  # Reshape tensor to [batch * split_amount, 256, 256, channels/split_amount]
+
+    return tensors_reshaped
+
 # Usage example:
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
+    # Set seed for reproducibility
+    if a.seed is None:
+        a.seed = random.randint(0, 2**31 - 1)
+
+    torch.manual_seed(a.seed)
+    np.random.seed(a.seed)
+    random.seed(a.seed)
+
+    # Create output directory if it doesn't exist
+    if not os.path.exists(a.output_dir):
+        os.makedirs(a.output_dir)
+
+    # Load options from the checkpoint if in test/export/eval mode
+    if a.mode in ["test", "export", "eval"]:
+        if a.checkpoint is None:
+            raise Exception("Checkpoint required for test, export, or eval mode")
+        
+        # Load options from JSON file
+        options = {"which_direction", "ngf", "ndf", "nbTargets", "depthFactor", "loss", "useLog"}
+        with open(os.path.join(a.checkpoint, "options.json")) as f:
+            for key, val in json.loads(f.read()).items():
+                if key in options:
+                    print("loaded", key, "=", val)
+                    setattr(a, key, val)
+
+        # Disable certain features in test mode
+        a.scale_size = CROP_SIZE
+        a.flip = False
+
+    # Print all arguments
+    for k, v in vars(a).items():
+        print(k, "=", v)
+
+    # Save options to output directory
+    with open(os.path.join(a.output_dir, "options.json"), "w") as f:
+        f.write(json.dumps(vars(a), sort_keys=True, indent=4))
+
+    # Load datasets
+    examples = load_examples(a.input_dir, a.mode == "train")
+    print(f"{a.mode} set count = {len(examples)}")
+    eval_examples = None
+    if a.mode == "train":
+        eval_dir = os.path.join(os.path.dirname(a.input_dir), "testBlended")
+        eval_examples = load_examples(eval_dir, False)
+        print(f"Evaluation set count = {len(eval_examples)}") 
+    
     # Create model
     model = create_model(device)
     
-    # Training loop
+    if a.mode == "train":
+        model_test = create_model()
+
+    # Prepare optimizer and loss
+    optimizer = torch.optim.Adam(model.parameters(), lr=a.lr, betas=(0.5, 0.999))
+    criterion = torch.nn.L1Loss()
+
+    # Use DataLoader for batching
+    train_loader = DataLoader(examples, batch_size=a.batch_size, shuffle=a.mode == "train")
+    eval_loader = DataLoader(eval_examples, batch_size=a.batch_size, shuffle=False) if eval_examples else None
+
+    # Prepare tensorboard writer
+    writer = SummaryWriter(log_dir=a.output_dir) if a.summary_freq > 0 else None
+
+    # Load checkpoint if available
+    if a.checkpoint is not None:
+        print(f"Loading model from checkpoint: {a.checkpoint}")
+        checkpoint = torch.load(os.path.join(a.checkpoint, "model.pth"))
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    # Training or testing
+    if a.mode in ["test", "eval"]:
+        print("Running in test/eval mode")
+        with torch.no_grad():
+            run_test(model, eval_loader, writer)
+    else:
+        print("Running in training mode")
+        train(model, model_test, train_loader, eval_loader, optimizer, criterion, writer)
+
+def train(model, model_test, train_loader, eval_loader, optimizer, criterion, writer):
+    model.train()
+    start_time = time.time()
+
     for epoch in range(a.max_epochs):
-        for batch in train_dataloader:
-            inputs = batch['input'].to(device)
-            targets = batch['target'].to(device)
-            
-            results = model['train_step'](inputs, targets)
-            
-            # Log results, save checkpoints, etc.
+        for step, batch in enumerate(train_loader):
+            inputs, targets = batch["inputs"], batch["targets"]
+
+            # Forward pass
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+
+            # Backward pass and optimization
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            global_step = epoch * len(train_loader) + step
+
+            # Log progress
+            if global_step % a.progress_freq == 0:
+                print(f"Epoch {epoch}, Step {step}, Loss: {loss.item()}")
+
+            # Write to tensorboard
+            if writer and global_step % a.summary_freq == 0:
+                writer.add_scalar("Loss/train", loss.item(), global_step)
+
+            # Save checkpoint
+            if global_step % a.save_freq == 0:
+                save_checkpoint(model, optimizer, global_step)
+
+            # Evaluate on test set
+            if global_step % a.test_freq == 0 and eval_loader is not None:
+                run_test(model_test, eval_loader, writer)
+
+def run_test(model, data_loader, writer):
+    model.eval()
+    for step, batch in enumerate(data_loader):
+        inputs, targets = batch["inputs"], batch["targets"]
+        outputs = model(inputs)
+
+        # Save images or log them
+        save_images(outputs, step)
+        if writer:
+            writer.add_images("Outputs/test", outputs, step)
+
+def save_checkpoint(model, optimizer, step):
+    checkpoint = {
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "step": step,
+    }
+    torch.save(checkpoint, os.path.join(a.output_dir, f"model_{step}.pth"))
+
+# Normalizes a tensor throughout the Channels dimension (BatchSize, Width, Height, Channels)
+# Keeps the 4th dimension to 1. Output will be (BatchSize, Width, Height, 1).
+def torch_ormalize(tensor):
+    # Compute the length along the channels dimension
+    length = torch.sqrt(torch.sum(torch.square(tensor), dim=-1, keepdim=True))
+    
+    # Normalize the tensor by dividing each element by its corresponding length
+    normalized_tensor = tensor / length
+    return normalized_tensor
+
+# Computes the dot product between 2 tensors (BatchSize, Width, Height, Channels)
+# Keeps the 4th dimension to 1. Output will be (BatchSize, Width, Height, 1).
+def torch_DotProduct(tensorA, tensorB):
+    return torch.sum(tensorA * tensorB, dim=-1, keepdim=True)
+
+##########Rendering loss
+
+def torch_render_diffuse_Substance(diffuse, specular):
+    return diffuse * (1.0 - specular) / math.pi
+
+def torch_render_D_GGX_Substance(roughness, NdotH):
+    alpha = torch.square(roughness)
+    underD = 1 / torch.maximum(torch.tensor(0.001), (torch.square(NdotH) * (torch.square(alpha) - 1.0) + 1.0))
+    return (torch.square(alpha * underD) / math.pi)
+
+def torch_lampAttenuation(distance):
+    DISTANCE_ATTENUATION_MULT = 0.001
+    return 1.0 / (1.0 + DISTANCE_ATTENUATION_MULT * torch.square(distance))
+
+def torch_render_F_GGX_Substance(specular, VdotH):
+    sphg = torch.pow(2.0, ((-5.55473 * VdotH) - 6.98316) * VdotH)
+    return specular + (1.0 - specular) * sphg
+
+def torch_render_G_GGX_Substance(roughness, NdotL, NdotV):
+    return G1_Substance(NdotL, torch.square(roughness) / 2) * G1_Substance(NdotV, torch.square(roughness) / 2)
+
+def G1_Substance(NdotW, k):
+    return 1.0 / torch.maximum((NdotW * (1.0 - k) + k), torch.tensor(0.001))
+
+def squeezeValues(tensor, min, max):
+    return torch.clamp(tensor, min, max)
+
+# svbrdf : (BatchSize, Width, Height, 4 * 3)
+# wo : (BatchSize,1,1,3)
+# wi : (BatchSize,1,1,3)
+def torch_Render(svbrdf, wi, wo, includeDiffuse=True):
+    wiNorm = torch_Normalize(wi)
+    woNorm = torch_Normalize(wo)
+    h = torch_Normalize((wiNorm + woNorm) / 2.0)
+    
+    diffuse = squeezeValues(deprocess(svbrdf[:, :, :, 3:6]), 0.0, 1.0)
+    normals = svbrdf[:, :, :, 0:3]
+    specular = squeezeValues(deprocess(svbrdf[:, :, :, 9:12]), 0.0, 1.0)
+    roughness = squeezeValues(deprocess(svbrdf[:, :, :, 6:9]), 0.0, 1.0)
+    roughness = torch.maximum(roughness, torch.tensor(0.001))
+    
+    NdotH = torch_DotProduct(normals, h)
+    NdotL = torch_DotProduct(normals, wiNorm)
+    NdotV = torch_DotProduct(normals, woNorm)
+    VdotH = torch_DotProduct(woNorm, h)
+
+    diffuse_rendered = torch_render_diffuse_Substance(diffuse, specular)
+    D_rendered = torch_render_D_GGX_Substance(roughness, torch.maximum(torch.tensor(0.0), NdotH))
+    G_rendered = torch_render_G_GGX_Substance(roughness, torch.maximum(torch.tensor(0.0), NdotL), torch.maximum(torch.tensor(0.0), NdotV))
+    F_rendered = torch_render_F_GGX_Substance(specular, torch.maximum(torch.tensor(0.0), VdotH))
+
+    specular_rendered = F_rendered * (G_rendered * D_rendered * 0.25)
+    result = specular_rendered
+
+    if includeDiffuse:
+        result = result + diffuse_rendered
+
+    lampIntensity = 1.0
+    # lampDistance = torch.sqrt(torch.sum(torch.square(wi), dim=3, keepdim=True))
+
+    lampFactor = lampIntensity * math.pi  # torch_lampAttenuation(lampDistance) * lampIntensity * math.pi
+
+    result = result * lampFactor
+
+    result = result * torch.maximum(torch.tensor(0.0), NdotL) / torch.unsqueeze(
+        torch.maximum(wiNorm[:, :, :, 2], torch.tensor(0.001)), dim=-1
+    )  # This division compensates for the cosine distribution of intensity in rendering
+
+    return [result, D_rendered, G_rendered, F_rendered, diffuse_rendered, diffuse]
 
 
 main()
