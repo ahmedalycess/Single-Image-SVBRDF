@@ -1,6 +1,8 @@
 # Single-Image SVBRDF Capture with a Rendering-Aware Deep Network
 ![teaser](https://team.inria.fr/graphdeco/files/2018/08/teaser_v0.png)
-This repository contains the code for our paper "Single-Image SVBRDF Capture with a Rendering-Aware Deep Network, Valentin Deschaintre, Miika Aittala, Fredo Durand, George Drettakis, Adrien Bousseau. Transactions on graphics (Siggraph Conference Proceedings),  aug 2018".
+This repository initially contains the code for the paper "Single-Image SVBRDF Capture with a Rendering-Aware Deep Network, Valentin Deschaintre, Miika Aittala, Fredo Durand, George Drettakis, Adrien Bousseau. Transactions on graphics (Siggraph Conference Proceedings),  aug 2018".
+
+We forked the repository in order to transform it from TensorFlow to PyTorch and proposed some ideas to improve the outcome, which will be discussed with our tutors and implemented as part of the "Generative Materials Project" at FAU.
 
 The project webpage can be found here: https://team.inria.fr/graphdeco/projects/deep-materials/
 
@@ -80,19 +82,7 @@ Here is a description of all useful parameters for inference :
 
 --logOutputAlbedos	"Log the output albedos diffuse and specular default is false, to use just add "--logOutputAlbedos""
 
-## Bibtex
-If you use our code, please cite our paper:
 
-@Article{DADDB18,
-  author       = "Deschaintre, Valentin and Aittala, Miika and Durand, Fr\'edo and Drettakis, George and Bousseau, Adrien",
-  title        = "Single-Image SVBRDF Capture with a Rendering-Aware Deep Network",
-  journal      = "ACM Transactions on Graphics (SIGGRAPH Conference Proceedings)",
-  number       = "128",
-  volume       = "37",
-  pages        = "15",
-  month        = "aug",
-  year         = "2018",
-  keywords     = "material capture, appearance capture, SVBRDF, deep learning",
   url          = "http://www-sop.inria.fr/reves/Basilic/2018/DADDB18"
 }
 

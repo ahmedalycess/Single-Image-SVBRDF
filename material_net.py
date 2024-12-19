@@ -1103,7 +1103,6 @@ def tf_lampAttenuation(distance):
     DISTANCE_ATTENUATION_MULT = 0.001
     return 1.0 / (1.0 + DISTANCE_ATTENUATION_MULT*tf.square(distance));
 
-
 def tf_render_F_GGX_Substance(specular, VdotH):
     sphg = tf.pow(2.0, ((-5.55473 * VdotH) - 6.98316) * VdotH);
     return specular + (1.0 - specular) * sphg
@@ -1113,7 +1112,6 @@ def tf_render_G_GGX_Substance(roughness, NdotL, NdotV):
     
 def G1_Substance(NdotW, k):
     return 1.0/tf.maximum((NdotW * (1.0 - k) + k), 0.001)
-
 
 def squeezeValues(tensor, min, max):
     return tf.clip_by_value(tensor, min, max)
