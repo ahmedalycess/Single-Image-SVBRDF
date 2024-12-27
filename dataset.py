@@ -10,14 +10,11 @@ class MaterialDataset(torch.utils.data.Dataset):
     Class representing a collection of SVBRDF samples with corresponding input images (rendered or real views of the SVBRDF)
     """
 
-    def __init__(self, data_directory, image_size, random_crop=False):
+    def __init__(self, data_directory, image_size):
         self.data_directory = data_directory #./DummyData
         self.file_paths = [os.path.join(data_directory, f) for f in os.listdir(data_directory) if os.path.isfile(os.path.join(data_directory, f))]
 
         self.image_size             = image_size #256
-
-        # If scale mode is 'crop', crop out a randomly placed window from the image
-        self.random_crop = random_crop
 
     def __len__(self):
         return len(self.file_paths)
@@ -46,6 +43,10 @@ class MaterialDataset(torch.utils.data.Dataset):
         #print("input_image.shape: ", input_image.shape)
 
         return {'input': input_image, 'svbrdf': svbrdf}
+
+    # get length of the dataset
+    def __len__(self):
+        return len(self.file_paths)
 
     # visualize the dataset item using matplotlib
     def visualize(self, idx):
@@ -101,7 +102,8 @@ class MaterialDataset(torch.utils.data.Dataset):
 
 
 def main():
-    dataset = MaterialDataset(data_directory='./DummyData', image_size=256)
+    dataset = MaterialDataset(data_directory='DeepMaterialsData/Data_Deschaintre18/trainBlended', image_size=256)
+    print("Dataset length: ", len(dataset))
     dataset.visualize(0)
 
 if __name__ == '__main__':
