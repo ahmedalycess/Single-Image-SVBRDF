@@ -1,95 +1,98 @@
 import torch
 import torch.nn as nn
-import renderers
+import torch.nn.functional as F
+from renderer import Renderer
+from helpers import unpack_svbrdf, create_surface_array
+from scene import generate_diffuse_rendering, generate_specular_rendering
 
-def unpack_svbrdf(svbrdf, is_encoded = False):
-    svbrdf_parts = svbrdf.split(1, dim=-3)
-
-    normals   = None
-    diffuse   = None
-    roughness = None
-    specular  = None
-    if not is_encoded:
-        normals   = torch.cat(svbrdf_parts[0:3 ], dim=-3)
-        diffuse   = torch.cat(svbrdf_parts[3:6 ], dim=-3)
-        roughness = torch.cat(svbrdf_parts[6:9 ], dim=-3)
-        specular  = torch.cat(svbrdf_parts[9:12], dim=-3)
-    else:
-        normals   = torch.cat(svbrdf_parts[0:2], dim=-3)
-        diffuse   = torch.cat(svbrdf_parts[2:5], dim=-3)
-        roughness = torch.cat(svbrdf_parts[5:6], dim=-3)
-        specular  = torch.cat(svbrdf_parts[6:9], dim=-3)
-
-    return normals, diffuse, roughness, specular
 
 class SVBRDFL1Loss(nn.Module):
-    def forward(self, input, target):
+    def forward(self, output, target):
         # Split the SVBRDF into its individual components
-        input_normals,  input_diffuse,  input_roughness,  input_specular  = self.unpack_svbrdf(input)
-        target_normals, target_diffuse, target_roughness, target_specular = self.unpack_svbrdf(target)
+        output_normals,  output_diffuse,  output_roughness,  output_specular  = unpack_svbrdf(output)
+        target_normals, target_diffuse, target_roughness, target_specular = unpack_svbrdf(target)
 
         epsilon_l1      = 0.01
-        input_diffuse   = torch.log(input_diffuse   + epsilon_l1)
-        input_specular  = torch.log(input_specular  + epsilon_l1)
+        output_diffuse   = torch.log(output_diffuse   + epsilon_l1)
+        output_specular  = torch.log(output_specular  + epsilon_l1)
         target_diffuse  = torch.log(target_diffuse  + epsilon_l1)
         target_specular = torch.log(target_specular + epsilon_l1)
 
         # Compute L1 loss for each component
         loss = (
-            nn.functional.l1_loss(input_normals, target_normals)
-            + nn.functional.l1_loss(input_diffuse, target_diffuse)
-            + nn.functional.l1_loss(input_roughness, target_roughness)
-            + nn.functional.l1_loss(input_specular, target_specular)
+            nn.functional.l1_loss(output_normals, target_normals)
+            + nn.functional.l1_loss(output_diffuse, target_diffuse)
+            + nn.functional.l1_loss(output_roughness, target_roughness)
+            + nn.functional.l1_loss(output_specular, target_specular)
         )
 
         return loss
     
 class SVBRDFL2Loss(nn.Module):
-    def forward(self, input, target):
+    def forward(self, output, target):
         # Split the SVBRDF into its individual components
-        input_normals, input_diffuse, input_roughness, input_specular = unpack_svbrdf(input)
+        output_normals, output_diffuse, output_roughness, output_specular = unpack_svbrdf(output)
         target_normals, target_diffuse, target_roughness, target_specular = unpack_svbrdf(target)
 
         epsilon_l2 = 0.01
-        input_diffuse = torch.log(input_diffuse + epsilon_l2)
-        input_specular = torch.log(input_specular + epsilon_l2)
+        output_diffuse = torch.log(output_diffuse + epsilon_l2)
+        output_specular = torch.log(output_specular + epsilon_l2)
         target_diffuse = torch.log(target_diffuse + epsilon_l2)
         target_specular = torch.log(target_specular + epsilon_l2)
 
         # Compute L2 loss for each component
         loss = (
-            nn.functional.mse_loss(input_normals, target_normals)
-            + nn.functional.mse_loss(input_diffuse, target_diffuse)
-            + nn.functional.mse_loss(input_roughness, target_roughness)
-            + nn.functional.mse_loss(input_specular, target_specular)
+            nn.functional.mse_loss(output_normals, target_normals)
+            + nn.functional.mse_loss(output_diffuse, target_diffuse)
+            + nn.functional.mse_loss(output_roughness, target_roughness)
+            + nn.functional.mse_loss(output_specular, target_specular)
         )
 
         return loss
 
 class RenderingLoss(nn.Module):
-    def __init__(self, renderer):
+    def __init__(self, nb_diffuse_rendering = 3, nb_specular_rendering = 6, loss_type = "render"):
         super(RenderingLoss, self).__init__()
-        
-        self.renderer = renderer
-        self.random_configuration_count   = 3
-        self.specular_configuration_count = 6
+        self.renderer = Renderer()
+        self.nb_diffuse_rendering   = nb_diffuse_rendering
+        self.nb_specular_rendering = nb_specular_rendering
+        self.loss_type = loss_type
 
-    def forward(self, input, target):
-        batch_input_renderings = self.renderer.render_batch(input)  # Renderer has to support Batch-Rendering
-        batch_target_renderings = self.renderer.render_batch(target)
+    def forward(self,output, target):
+        batch_size = output.shape[0]
+        rendered_diffuse_images_outputs = []
+        rendered_diffuse_images_targets = []
+    
+        for _ in range(self.nb_diffuse_rendering):
+            diffuse_renderings = generate_diffuse_rendering(batch_size, target, output, self.renderer.render)
+            rendered_diffuse_images_targets.append(diffuse_renderings[0][0])
+            rendered_diffuse_images_outputs.append(diffuse_renderings[1][0])
 
-        #logarithmic transformation: applied to the rendered images with a small epsilon for stability
-        epsilon_render    = 0.1
-        batch_input_renderings_logged  = torch.log(torch.stack(batch_input_renderings, dim=0)  + epsilon_render)
-        batch_target_renderings_logged = torch.log(torch.stack(batch_target_renderings, dim=0) + epsilon_render)
+        rendered_specular_images_targets = []
+        rendered_specular_images_outputs = []
+    
+        for _ in range(self.nb_specular_rendering):
+            specular_renderings = generate_specular_rendering(batch_size=batch_size, surface_array=create_surface_array(crop_size=1), targets=target, outputs=output, render_fn=self.renderer.render, include_diffuse=True)
+            rendered_specular_images_targets.append(specular_renderings[0][0])
+            rendered_specular_images_outputs.append(specular_renderings[1][0])
 
-        # uses L1 loss on the logarithmic space of the rendered images
-        loss = nn.functional.l1_loss(batch_input_renderings_logged, batch_target_renderings_logged)
 
-        return loss
+        rerendered_targets = torch.cat(rendered_diffuse_images_targets + rendered_specular_images_targets, dim=-1)
+        rerendered_outputs = torch.cat(rendered_diffuse_images_outputs + rendered_specular_images_outputs, dim=-1)
+
+        if self.loss_type == "render":
+            gen_loss = F.l1_loss(torch.log(rerendered_targets + 0.01), torch.log(rerendered_outputs + 0.01))
+        elif self.loss_type == "renderL2":
+            gen_loss = F.mse_loss(torch.log(rerendered_targets + 0.01), torch.log(rerendered_outputs + 0.01))
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
+    
+        return gen_loss
+
+
 
 class MixedLoss(nn.Module):
-    def __init__(self, renderer, l1_weight = 0.1, l2_weight = 0.05):
+    def __init__(self, l1_weight = 0.1, l2_weight = 0.05):
         super(MixedLoss, self).__init__()
 
         # l1_weight scales the contribution of the SVBRDFL1Loss to the total loss
@@ -97,13 +100,37 @@ class MixedLoss(nn.Module):
          # l2_weight scales the contribution of the SVBRDFL1Loss to the total loss
         self.l2_weight = l2_weight
         self.l1_loss = SVBRDFL1Loss()
-        self.l2_loss = SVBRDFL2Loss
-        self.rendering_loss = RenderingLoss(renderer)
+        self.l2_loss = SVBRDFL2Loss()
+        self.rendering_loss = RenderingLoss()
 
-    def forward(self, input, target):
-        l1 = self.l1_loss(input, target)
-        l2 = self.l2_loss(input, target)
-        rendering = self.rendering_loss(input, target)
+    def forward(self, output, target):
+        l1 = self.l1_loss.forward(output, target)
+        l2 = self.l2_loss.forward(output, target)
+        rendering = self.rendering_loss.forward(output, target)
 
         return self.l1_weight * l1 + self.l2_weight * l2 + rendering
-        # TODO define if cases which losses to combine when (dependent on set flags?)
+
+
+if __name__ == "__main__":
+    # Test the losses
+    batch_size = 4
+    output = torch.rand(batch_size, 12, 256, 256)
+    target = torch.rand(batch_size, 12, 256, 256)
+
+
+    
+    l1_loss = SVBRDFL1Loss()
+    loss = l1_loss.forward(output, target)
+    print(loss)
+
+    l2_loss = SVBRDFL2Loss()
+    loss = l2_loss.forward(output, target)
+    print(loss)
+
+    rendering_loss = RenderingLoss()
+    loss = rendering_loss.forward(output, target)
+    print(loss)
+
+    mixed_loss = MixedLoss()
+    loss = mixed_loss.forward(output, target)
+    print(loss)
