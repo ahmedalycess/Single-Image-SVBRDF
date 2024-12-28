@@ -10,7 +10,7 @@ class Renderer:
     def __init__(self):
         pass
 
-    def render(self, svbrdf, wi, wo, includeDiffuse=True):
+    def render(self, svbrdf, wi, wo, include_diffuse=True):
         """
         Render the SVBRDF using a local shading model
 
@@ -22,7 +22,7 @@ class Renderer:
             The incoming light direction. Shape: (BatchSize, 1, 1, 3)
         wo : torch.Tensor
             The outgoing light direction. Shape: (BatchSize, 1, 1, 3)
-        includeDiffuse : bool
+        include_diffuse : bool
 
         Returns
         ---------------------
@@ -53,7 +53,7 @@ class Renderer:
         specular_rendered = F_rendered * (G_rendered * D_rendered * 0.25)
         result = specular_rendered
 
-        if includeDiffuse:
+        if include_diffuse:
             result += diffuse_rendered
 
         lampIntensity = 1.0
