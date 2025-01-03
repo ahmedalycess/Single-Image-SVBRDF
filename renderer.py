@@ -11,31 +11,35 @@ class Renderer:
 
     def render(self, svbrdf, wi, wo, include_diffuse=True):
         """
-        Render the SVBRDF using a local shading model
+        Render the SVBRDF using a local shading model.
 
         Parameters
         ---------------------
         svbrdf : torch.Tensor
-            The SVBRDF to render. Shape: (BatchSize, Width, Height, 4 * 3)
+            The SVBRDF to render. Shape: (BatchSize, 12, 256, 256)
         wi : torch.Tensor
-            The incoming light direction. Shape: (BatchSize, 1, 1, 3)
+            The incoming light direction. Shape: (BatchSize, 3, 1, 1)
         wo : torch.Tensor
-            The outgoing light direction. Shape: (BatchSize, 1, 1, 3)
+            The outgoing light direction. Shape: (BatchSize, 3, 1, 1)
         include_diffuse : bool
 
         Returns
         ---------------------
         torch.Tensor
-            The rendered image. Shape: (BatchSize, Width, Height, 3)
+            The rendered image. Shape: (BatchSize, 3, 256, 256)
         """
         
         wiNorm = torch_normalize(wi).to(svbrdf.device)
         woNorm = torch_normalize(wo).to(svbrdf.device)
         h = torch_normalize((wiNorm + woNorm) / 2.0).to(svbrdf.device)
-        diffuse = torch_squeeze(deprocess(svbrdf[:, :, :, 3:6]), 0.0, 1.0).to(svbrdf.device)
-        normals = svbrdf[:, :, :, 0:3]
-        specular = torch_squeeze(deprocess(svbrdf[:, :, :, 9:12]), 0.0, 1.0).to(svbrdf.device)
-        roughness = torch_squeeze(deprocess(svbrdf[:, :, :, 6:9]), 0.0, 1.0).to(svbrdf.device)
+
+        
+        # Extract channels from the SVBRDF tensor
+        normals = svbrdf[:, 0:3, :, :]  # (BatchSize, 3, 256, 256)
+        diffuse = torch_squeeze(deprocess(svbrdf[:, 3:6, :, :]), 0.0, 1.0).to(svbrdf.device)
+        roughness = torch_squeeze(deprocess(svbrdf[:, 6:9, :, :]), 0.0, 1.0).to(svbrdf.device)
+        specular = torch_squeeze(deprocess(svbrdf[:, 9:12, :, :]), 0.0, 1.0).to(svbrdf.device)
+        
         roughness = torch.clamp(roughness, min=0.001).to(svbrdf.device)
 
         NdotH = torch_dot_product(normals, h)
@@ -58,8 +62,7 @@ class Renderer:
         lampFactor = lampIntensity * math.pi
 
         result *= lampFactor
-        result *= torch.clamp(NdotL, min=0.0) / torch.clamp(wiNorm[..., 2:3], min=0.001)
-
+        result *= torch.clamp(NdotL, min=0.0) / torch.clamp(wiNorm[:, 2:3, :, :], min=0.001)
         return [result, D_rendered, G_rendered, F_rendered, diffuse_rendered, diffuse]
 
     def _render_diffuse_Substance(self, diffuse, specular):
