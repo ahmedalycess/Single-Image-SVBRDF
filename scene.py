@@ -30,11 +30,12 @@ def generate_specular_rendering(batch_size, surface_array, targets, outputs, ren
 
     current_shift = torch.cat([torch.rand(batch_size, 2) * 2 - 1, torch.zeros(batch_size, 1) + 0.0001], dim=-1)
 
-    def generate_distance():
-        return torch.rand(batch_size, 1) * 0.9 + 0.1
+    def generate_distance(batch_size):
+        gaussian = torch.normal(mean=0.5, std=0.75, size=(batch_size, 1))  # Gaussian distribution
+        return torch.exp(gaussian)  # Exponential transformation
 
-    current_view_pos = current_view_dir * generate_distance() + current_shift
-    current_light_pos = current_light_dir * generate_distance() + current_shift
+    current_view_pos = current_view_dir * generate_distance(batch_size=batch_size) + current_shift
+    current_light_pos = current_light_dir * generate_distance(batch_size=batch_size) + current_shift
 
     current_view_pos = current_view_pos.unsqueeze(1).unsqueeze(1)
     current_light_pos = current_light_pos.unsqueeze(1).unsqueeze(1)
