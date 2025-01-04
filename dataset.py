@@ -2,7 +2,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import os
 import torch
-from helpers import preprocess, deprocess
+from utils import preprocess, deprocess, unpack_svbrdf, pack_svbrdf
 
 class MaterialDataset(torch.utils.data.Dataset):
     """
@@ -33,11 +33,9 @@ class MaterialDataset(torch.utils.data.Dataset):
         diffuse   = preprocess(image_parts[2].unsqueeze(0))
         roughness = preprocess(image_parts[3].unsqueeze(0))
         specular  = preprocess(image_parts[4].unsqueeze(0))
-        svbrdf = torch.cat([normals, diffuse, roughness, specular], dim=-3).squeeze(0) # [12, 256, 256]
-        #print("svbrdf.shape: ", svbrdf.shape)
+
+        svbrdf = pack_svbrdf(normals=normals, diffuse=diffuse, roughness=roughness, specular=specular).squeeze(0) # [12, 256, 256]
         input_image = preprocess(image_parts[0]) # [3, 256, 256]
-        
-        print("input_image.shape: ", input_image.shape)
 
         return {'input': input_image, 'svbrdf': svbrdf}
 
