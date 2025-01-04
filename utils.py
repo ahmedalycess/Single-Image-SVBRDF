@@ -1,17 +1,14 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
-import math
 
 # ------------------------
-# Helpers
+# Helper functions
 # ------------------------
 
 def torch_normalize(tensor, eps=1e-8):
     """
     Normalize the tensor along the last dimension.
     """
-    norm = torch.sqrt(torch.sum(tensor**2, dim=1, keepdim=True) + eps)
+    norm = torch.sqrt(torch.sum(tensor**2, dim=-1, keepdim=True) + eps)
     return tensor / norm
 
 def torch_squeeze( tensor, min_val, max_val):
@@ -43,7 +40,6 @@ def unpack_svbrdf(svbrdf, is_encoded = False):
     Unpack the SVBRDF tensor into its individual components.
     """
     svbrdf_parts = svbrdf.split(1, dim=-3)
-
     normals   = None
     diffuse   = None
     roughness = None
@@ -67,25 +63,15 @@ def pack_svbrdf(normals, diffuse, roughness, specular):
     """
     return torch.cat([normals, diffuse, roughness, specular], dim=-3)
 
+def decode_svbrdf(svbrdf):
+    normals_xy, diffuse, roughness, specular = unpack_svbrdf(svbrdf, True)
 
-def create_surface_array(crop_size):
-    # Create linearly spaced values for X and Y
-    x_surface_array = torch.linspace(-1.0, 1.0, steps=crop_size).unsqueeze(-1)  # Shape: [crop_size, 1]
-    x_surface_array = x_surface_array.repeat(1, crop_size)  # Tile across the second dimension
-    
-    y_surface_array = -1 * x_surface_array.t()  # Transpose and multiply by -1
-    
-    # Add the last dimension for X and Y
-    x_surface_array = x_surface_array.unsqueeze(-1)  # Shape: [crop_size, crop_size, 1]
-    y_surface_array = y_surface_array.unsqueeze(-1)  # Shape: [crop_size, crop_size, 1]
-    
-    # Create a zero array for Z values
-    z_surface_array = torch.zeros(crop_size, crop_size, 1)  # Shape: [crop_size, crop_size, 1]
-    
-    # Concatenate X, Y, and Z to form the surface array
-    surface_array = torch.cat([x_surface_array, y_surface_array, z_surface_array], dim=-1)  # Shape: [crop_size, crop_size, 3]
-    
-    # Add a batch dimension
-    surface_array = surface_array.unsqueeze(0)  # Shape: [1, crop_size, crop_size, 3]
-    
-    return surface_array
+    # Repeat roughness channel three times for consistent processing
+    roughness = roughness.expand(*roughness.shape[:-3], 3, *roughness.shape[-2:])
+
+    # Compute normals by reconstructing z and normalizing
+    normals_z = torch.ones_like(normals_xy[:, :1])
+    normals = torch.cat([normals_xy, normals_z], dim=-3)
+    normals = normals / normals.norm(dim=-3, keepdim=True)
+
+    return pack_svbrdf(normals, diffuse, roughness, specular)

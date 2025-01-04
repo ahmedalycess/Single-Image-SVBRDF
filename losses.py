@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from renderer import Renderer
-from utils import unpack_svbrdf, create_surface_array, decode_svbrdf, deprocess
+from utils import unpack_svbrdf, decode_svbrdf, deprocess
 from scene import generate_diffuse_rendering, generate_specular_rendering
 
 
@@ -74,7 +74,7 @@ class RenderingLoss(nn.Module):
         rendered_specular_images_outputs = []
     
         for _ in range(self.nb_specular_rendering):
-            specular_renderings = generate_specular_rendering(batch_size=batch_size, surface_array=create_surface_array(crop_size=1), targets=target, outputs=output, render_fn=self.renderer.render, include_diffuse=True)
+            specular_renderings = generate_specular_rendering(batch_size=batch_size, surface_array=self._create_surface_array(1), targets=target, outputs=output, render_fn=self.renderer.render, include_diffuse=True)
             rendered_specular_images_targets.append(specular_renderings[0][0])
             rendered_specular_images_outputs.append(specular_renderings[1][0])
 
@@ -90,6 +90,19 @@ class RenderingLoss(nn.Module):
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         return gen_loss
+    
+    def _create_surface_array(self, crop_size: int) -> torch.Tensor:
+        x_surface = torch.linspace(-1.0, 1.0, steps=crop_size).unsqueeze(-1).repeat(1, crop_size)
+    
+        y_surface = -1 * x_surface.t()
+        
+        x_surface = x_surface.unsqueeze(-1)
+        y_surface = y_surface.unsqueeze(-1)
+        
+        z_surface = torch.zeros((crop_size, crop_size, 1), dtype=torch.float32)
+
+        surface_array = torch.cat([x_surface, y_surface, z_surface], dim=-1).unsqueeze(0).permute(0, 3, 1, 2)
+        return surface_array
 
 
 
