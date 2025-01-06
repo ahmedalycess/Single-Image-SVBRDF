@@ -2,7 +2,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import os
 import torch
-from utils import preprocess, deprocess, unpack_svbrdf, pack_svbrdf
+from utils import unpack_svbrdf, pack_svbrdf
 
 class MaterialDataset(torch.utils.data.Dataset):
     """
@@ -22,20 +22,19 @@ class MaterialDataset(torch.utils.data.Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        full_image   = torch.Tensor(plt.imread(self.file_paths[idx])).permute(2, 0, 1)
+        full_image  = torch.Tensor(plt.imread(self.file_paths[idx])).permute(2, 0, 1) # [channels, height, width] --> [3, 288, 1440] 
+
         # resize the image to width self.image_size* 5 and height self.image_size
         full_image = torch.nn.functional.interpolate(full_image.unsqueeze(0), size=(self.image_size, self.image_size*5), mode='bilinear').squeeze(0) 
         image_parts = torch.cat(full_image.unsqueeze(0).chunk(5, dim=-1), 0) # [5 , 3, 256, 256]
-        #print(" image_parts.shape", image_parts.shape)
-        # Read the SVBRDF
-        svbrdf = None
-        normals   = preprocess(image_parts[1].unsqueeze(0))
-        diffuse   = preprocess(image_parts[2].unsqueeze(0))
-        roughness = preprocess(image_parts[3].unsqueeze(0))
-        specular  = preprocess(image_parts[4].unsqueeze(0))
 
-        svbrdf = pack_svbrdf(normals=normals, diffuse=diffuse, roughness=roughness, specular=specular).squeeze(0) # [12, 256, 256]
-        input_image = preprocess(image_parts[0]) # [3, 256, 256]
+        input_image = image_parts[0] # [3, 256, 256]
+        normals     = image_parts[1] # [3, 256, 256]
+        diffuse     = image_parts[2] # [3, 256, 256]
+        roughness   = image_parts[3] # [3, 256, 256]
+        specular    = image_parts[4] # [3, 256, 256]
+        
+        svbrdf = pack_svbrdf(normals=normals, diffuse=diffuse, roughness=roughness, specular=specular) # [12, 256, 256]  
 
         return {'input': input_image, 'svbrdf': svbrdf}
 
@@ -47,21 +46,19 @@ class MaterialDataset(torch.utils.data.Dataset):
     def visualize(self, idx):
         # deprocess images before visualization
         sample = self.__getitem__(idx)
-        input_image = deprocess(sample['input']).permute(1, 2, 0)
-        #print("input_image.shape: ", input_image.shape)
+    
+        input_image = sample['input']
         svbrdf = sample['svbrdf']
-        svbrdf_parts = svbrdf.split(1, dim=-3)
-        normals   = torch.cat(svbrdf_parts[0:3 ], dim=-3)
-        diffuse   = torch.cat(svbrdf_parts[3:6 ], dim=-3)
-        roughness = torch.cat(svbrdf_parts[6:9 ], dim=-3)
-        specular  = torch.cat(svbrdf_parts[9:12], dim=-3)
-        
-        # transpose the image to be in the format (height, width, channels)
-        normals = deprocess(normals).permute(1, 2, 0)
-        diffuse = deprocess(diffuse).permute(1, 2, 0)
-        roughness = deprocess(roughness).permute(1, 2, 0)
-        specular = deprocess(specular).permute(1, 2, 0)
 
+        normals, diffuse, roughness, specular = unpack_svbrdf(svbrdf)
+        
+
+        input_image = input_image.permute(1, 2, 0)
+        normals     = normals.permute(1, 2, 0)
+        diffuse     = diffuse.permute(1, 2, 0)
+        roughness   = roughness.permute(1, 2, 0)
+        specular    = specular.permute(1, 2, 0)
+        
         # Create the figure and axes grid
         fig = plt.figure(figsize=(12, 6))
 
@@ -91,12 +88,10 @@ class MaterialDataset(torch.utils.data.Dataset):
         # Display the layout
         plt.show()
 
-
-
 def main():
     dataset = MaterialDataset(data_directory='./DummyData', image_size=256)
     print("Dataset length: ", len(dataset))
-    dataset.visualize(75)
+    dataset.visualize(61)
 
 if __name__ == '__main__':
     main()
