@@ -1,49 +1,71 @@
 import torch
 
-# ------------------------
-# Helper functions
-# ------------------------
+def dot_product(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the dot product of two tensors along the channel dimension. 
+        Args:
+            a: First tensor
+            b: Second tensor
+        Returns:
+            Tensor containing the dot product along the channel dimension
+    """
+    return torch.sum(a * b, dim=-3, keepdim=True)
 
-def torch_normalize(tensor, eps=1e-8):
+def normalize(a: torch.Tensor) -> torch.Tensor:
     """
-    Normalize the tensor along the last dimension.
+    Normalize a tensor along the channel dimension.
+        Args:
+            a: Tensor to normalize
+        Returns:
+            Normalized tensor
     """
-    norm = torch.sqrt(torch.sum(tensor**2, dim=-1, keepdim=True) + eps)
-    return tensor / norm
+    return torch.nn.functional.normalize(a, p=2, dim=-3)
 
-def torch_squeeze( tensor, min_val, max_val):
+def heaviside_step(x: torch.Tensor) -> torch.Tensor:
     """
-    Squeeze the tensor values to the range [min_val, max_val].
+    Compute the Heaviside step function for a tensor.
+        Args:
+            x: Tensor to compute the Heaviside step function for
+        Returns:
+            Tensor containing the Heaviside step function for the input tensor
     """
-    return torch.clamp(tensor, min_val, max_val)
+    return (x > 0.0).float()
 
-def torch_dot_product(a, b):
+def deprocess(tensor):
     """
-    Compute the dot product between two tensors.
+    Transforms a tensor from range [-1, 1] to [0, 1]
     """
-    return torch.sum(a * b, dim=-1, keepdim=True)
+    return (tensor + 1) / 2
 
-def preprocess(x):
+def preprocess(tensor):
     """
-    preprocess image tensor from [0,1] to [-1,1]
+    Transforms a tensor from range [0, 1] to [-1, 1]
     """
-    return x * 2 - 1
+    return tensor * 2 - 1
 
-def deprocess(x):
+def pack_svbrdf(normals, diffuse, roughness, specular):
     """
-    deprocess image tensor from [-1,1] to [0,1]
+    Pack the SVBRDF into a single tensor.
+        Args:
+            normals:   Tensor containing the normals
+            diffuse:   Tensor containing the diffuse albedo
+            roughness: Tensor containing the roughness
+            specular:  Tensor containing the specular albedo
+        Returns:
+            Packed SVBRDF tensor
     """
-    return (x + 1) / 2.0
+    return torch.cat([normals, diffuse, roughness, specular], dim=-3)
 
 def unpack_svbrdf(svbrdf, is_encoded = False):
     """
-    Unpack the SVBRDF tensor into its individual components.
+    Unpack the SVBRDF tensor into its components.
+        Args:
+            svbrdf: Packed SVBRDF tensor
+        Returns:
+            Tuple containing the normals, diffuse albedo, roughness, and specular albedo
     """
-    svbrdf_parts = svbrdf.split(1, dim=-3)
-    normals   = None
-    diffuse   = None
-    roughness = None
-    specular  = None
+    svbrdf_parts = svbrdf.split(1, dim=-3) # Split the tensor along the channel dimension
+
     if not is_encoded:
         normals   = torch.cat(svbrdf_parts[0:3 ], dim=-3)
         diffuse   = torch.cat(svbrdf_parts[3:6 ], dim=-3)
@@ -57,21 +79,8 @@ def unpack_svbrdf(svbrdf, is_encoded = False):
 
     return normals, diffuse, roughness, specular
 
-def pack_svbrdf(normals, diffuse, roughness, specular):
+def gamma_encode(images):
     """
-    Pack the individual SVBRDF components into a single tensor.
+    Gamma encode images
     """
-    return torch.cat([normals, diffuse, roughness, specular], dim=-3)
-
-def decode_svbrdf(svbrdf):
-    normals_xy, diffuse, roughness, specular = unpack_svbrdf(svbrdf, True)
-
-    # Repeat roughness channel three times for consistent processing
-    roughness = roughness.expand(*roughness.shape[:-3], 3, *roughness.shape[-2:])
-
-    # Compute normals by reconstructing z and normalizing
-    normals_z = torch.ones_like(normals_xy[:, :1])
-    normals = torch.cat([normals_xy, normals_z], dim=-3)
-    normals = normals / normals.norm(dim=-3, keepdim=True)
-
-    return pack_svbrdf(normals, diffuse, roughness, specular)
+    return torch.pow(images, 1.0/2.2)

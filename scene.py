@@ -1,59 +1,63 @@
 import torch
-import math
-from PIL import Image
-import os
+import utils
 
-def generate_normalized_random_direction(batch_size, low_eps=0.001, high_eps=0.05):
-    r1 = torch.rand(batch_size, 1) * (1.0 - low_eps - high_eps) + low_eps
-    r2 = torch.rand(batch_size, 1)
-    r = torch.sqrt(r1)
-    phi = 2 * math.pi * r2
+class View:
+    def __init__(self, position):
+        self.position = position
 
-    x = r * torch.cos(phi)
-    y = r * torch.sin(phi)
-    z = torch.sqrt(1.0 - r**2)
-    final_vec = torch.cat([x, y, z], dim=-1)  # Shape: [batch_size, 3]
-    return final_vec
+class Light:
+    def __init__(self, position, color):
+        self.position   = position
+        self.color = color
 
-def generate_diffuse_rendering(batch_size, targets, outputs, render_fn):
-    current_view_pos = generate_normalized_random_direction(batch_size)                # Shape: [batch_size, 3]
-    current_light_pos = generate_normalized_random_direction(batch_size)               # Shape: [batch_size, 3]
-    wi = current_light_pos.unsqueeze(2).unsqueeze(3)                                   # Shape: [batch_size, 3, 1, 1]
-    wo = current_view_pos.unsqueeze(2).unsqueeze(3)                                    # Shape: [batch_size, 3, 1, 1]
-    rendered_diffuse = render_fn(targets, wi, wo)          # rendered_diffuse[0]:results.shape: [batch_size, 3, 256, 256])
-    rendered_diffuse_outputs = render_fn(outputs, wi, wo)  # rendered_outputs[0]:results.shape: [batch_size, 3, 256, 256])
-    return [rendered_diffuse, rendered_diffuse_outputs]
+class Scene:
+    def __init__(self, view, light):
+        self.view = view
+        self.light  = light
 
-def generate_specular_rendering(batch_size, surface_array, targets, outputs, render_fn, include_diffuse):
-    current_view_dir = generate_normalized_random_direction(batch_size)         # Shape: [batch_size, 3]
-    current_light_dir = current_view_dir * torch.tensor([-1.0, -1.0, 1.0])      # Shape: [batch_size, 3]
-                                                                                # shape: [batch_size, 3]
-    current_shift = torch.cat([torch.rand(batch_size, 2) * 2 - 1, torch.zeros(batch_size, 1) + 0.0001], dim=-1)
-    def generate_distance(batch_size):
-        gaussian = torch.normal(mean=0.5, std=0.75, size=(batch_size, 1))  # Gaussian distribution
-        return torch.exp(gaussian)  # Exponential transformation
+def generate_random_scenes(batch_size):
+    """
+    Generate random scenes with random view and light positions.
+    
+        Args:
+            batch_size: Number of scenes to generate
+        Returns:
+            List of Scene objects
+    """
 
-    current_view_pos = current_view_dir * generate_distance(batch_size=batch_size) + current_shift # Shape: [batch_size, 3]
-    current_light_pos = current_light_dir * generate_distance(batch_size=batch_size) + current_shift # Shape: [batch_size, 3]
+    view_position   = utils.generate_normalized_random_direction(batch_size, 0.001, 0.1) # shape = [batch_size, 3]
+    light_positions = utils.generate_normalized_random_direction(batch_size, 0.001, 0.1) # shape = [batch_size, 3]
 
-    current_view_pos = current_view_pos.unsqueeze(2).unsqueeze(3)   # Shape: [batch_size, 3, 1, 1]
-    current_light_pos = current_light_pos.unsqueeze(2).unsqueeze(3) # Shape: [batch_size, 3, 1, 1]
+    scenes = []
+    for i in range(batch_size): 
+        scenes.append(Scene( view = View(view_position[i]), light  = Light(light_positions[i], [20.0, 20.0, 20.0])))
 
+    return scenes
 
-    wo = current_view_pos - surface_array # Shape: [batch_size, 3, 1, 1]
-    wi = current_light_pos - surface_array # Shape: [batch_size, 3, 1, 1]
-    rendered_specular = render_fn(targets, wi, wo, include_diffuse=include_diffuse)   # rendered_specular[0]:results.shape: [batch_size, 3, 256, 256])
-    rendered_specular_outputs = render_fn(outputs, wi, wo, include_diffuse=include_diffuse) # rendered_outputs[0]:results.shape: [batch_size, 3, 256, 256])
+def generate_specular_scenes(batch_size):
+    """
+    Generate scenes with specular highlights in a perfect mirror configuration.
 
-    # # save the last images
-    # if not os.path.exists("images"):
-    #     os.makedirs("images")
+        Args:
+            batch_size: Number of scenes to generate
+        Returns:
+            List of Scene objects
+    """
+    
+    view_position   = utils.generate_normalized_random_direction(batch_size, 0.001, 0.1) # shape = [batch_size, 3]
+    light_positions = view_position * torch.Tensor([-1.0, -1.0, 1.0]).unsqueeze(0)
 
-    # for i in range(batch_size):
-    #     img = Image.fromarray((rendered_specular[0][i].detach().cpu().numpy() * 255).astype('uint8').transpose(1, 2, 0))
-    #     img.save(os.path.join("images", "target_" + str(i) + ".png"))
+    shift = torch.cat([ torch.Tensor(batch_size, 2).uniform_(-1.0, 1.0), torch.zeros((batch_size, 1)) + 0.0001], dim=-1)
 
-    #     img = Image.fromarray((rendered_specular_outputs[0][i].detach().cpu().numpy() * 255).astype('uint8').transpose(1, 2, 0))
-    #     img.save(os.path.join("images", "output_" + str(i) + ".png"))
+    distance_view  = torch.exp(torch.Tensor(batch_size, 1).normal_(mean=0.5, std=0.75)) 
+    distance_light = torch.exp(torch.Tensor(batch_size, 1).normal_(mean=0.5, std=0.75))
 
-    return [rendered_specular, rendered_specular_outputs]
+    
+    view_position   = view_position   * distance_view  + shift
+    light_positions = light_positions * distance_light + shift
+
+    scenes = []
+    for i in range(batch_size):
+        scenes.append(Scene(view= View(view_position[i]), light= Light(light_positions[i], [50.0, 50.0, 50.0])))
+
+    return scenes
