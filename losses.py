@@ -1,153 +1,94 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from renderer import Renderer
-from utils import unpack_svbrdf, decode_svbrdf, deprocess
-from scene import generate_diffuse_rendering, generate_specular_rendering
-
+import utils
 
 class SVBRDFL1Loss(nn.Module):
     def forward(self, output, target):
-        # Split the SVBRDF into its individual components
-        output_normals,  output_diffuse,  output_roughness,  output_specular  = unpack_svbrdf(decode_svbrdf(output))
-        target_normals, target_diffuse, target_roughness, target_specular = unpack_svbrdf(target)
+
+        output_normals,  output_diffuse,  output_roughness,  output_specular  = utils.unpack_svbrdf(output)
+        target_normals, target_diffuse, target_roughness, target_specular = utils.unpack_svbrdf(target)
 
         epsilon_l1      = 1e-3
-        output_diffuse   = torch.log(deprocess(output_diffuse)   + epsilon_l1)
-        output_specular  = torch.log(deprocess(output_specular)  + epsilon_l1)
-        target_diffuse  = torch.log(deprocess(target_diffuse)  + epsilon_l1)
-        target_specular = torch.log(deprocess(target_specular) + epsilon_l1)
 
-        # Compute L1 loss for each component
-        loss = (
-            nn.functional.l1_loss(output_normals, target_normals)
-            + nn.functional.l1_loss(output_diffuse, target_diffuse)
-            + nn.functional.l1_loss(output_roughness, target_roughness)
-            + nn.functional.l1_loss(output_specular, target_specular)
-        )
+        output_diffuse   = torch.log(output_diffuse   + epsilon_l1)
+        output_specular  = torch.log(output_specular  + epsilon_l1)
 
-        return loss
+        target_diffuse  = torch.log(target_diffuse  + epsilon_l1)
+        target_specular = torch.log(target_specular + epsilon_l1)
+
+        return  nn.functional.l1_loss(output_normals  , target_normals  ) + \
+                nn.functional.l1_loss(output_diffuse  , target_diffuse  ) + \
+                nn.functional.l1_loss(output_roughness, target_roughness) + \
+                nn.functional.l1_loss(output_specular , target_specular )
     
+
 class SVBRDFL2Loss(nn.Module):
     def forward(self, output, target):
-        # Split the SVBRDF into its individual components
-        output_normals, output_diffuse, output_roughness, output_specular = unpack_svbrdf(decode_svbrdf(output))
-        target_normals, target_diffuse, target_roughness, target_specular = unpack_svbrdf(target)
 
-        epsilon_l2 = 0.01
-        output_diffuse = torch.log(deprocess(output_diffuse) + epsilon_l2)
-        output_specular = torch.log(deprocess(output_specular) + epsilon_l2)
-        target_diffuse = torch.log(deprocess(target_diffuse) + epsilon_l2)
-        target_specular = torch.log(deprocess(target_specular) + epsilon_l2)
+        output_normals, output_diffuse, output_roughness, output_specular = utils.unpack_svbrdf(output)
+        target_normals, target_diffuse, target_roughness, target_specular = utils.unpack_svbrdf(target)
 
-        # Compute L2 loss for each component
-        loss = (
-            nn.functional.mse_loss(output_normals, target_normals)
-            + nn.functional.mse_loss(output_diffuse, target_diffuse)
-            + nn.functional.mse_loss(output_roughness, target_roughness)
-            + nn.functional.mse_loss(output_specular, target_specular)
-        )
+        epsilon_l2      = 1e-3
 
-        return loss
+        output_diffuse  = torch.log(output_diffuse  + epsilon_l2)
+        output_specular = torch.log(output_specular + epsilon_l2)
+
+        target_diffuse  = torch.log(target_diffuse  + epsilon_l2)
+        target_specular = torch.log(target_specular + epsilon_l2)
+
+       
+        return nn.functional.mse_loss(output_normals  , target_normals  ) + \
+               nn.functional.mse_loss(output_diffuse  , target_diffuse  ) + \
+               nn.functional.mse_loss(output_roughness, target_roughness) + \
+               nn.functional.mse_loss(output_specular , target_specular )
+
 
 class RenderingLoss(nn.Module):
-    def __init__(self, renderer, nb_diffuse_rendering = 3, nb_specular_rendering = 6, loss_type = "render"):
+    def __init__(self, renderer):
         super(RenderingLoss, self).__init__()
-        self.renderer = renderer
-        self.nb_diffuse_rendering   = nb_diffuse_rendering
-        self.nb_specular_rendering = nb_specular_rendering
-        self.loss_type = loss_type
-
-    def forward(self,output, target):
-        batch_size = output.shape[0]
-        rendered_diffuse_images_outputs = []
-        rendered_diffuse_images_targets = []
-
-        output = decode_svbrdf(output)
-
-        for _ in range(self.nb_diffuse_rendering):
-            diffuse_renderings = generate_diffuse_rendering(batch_size, target, output, self.renderer.render)
-            rendered_diffuse_images_targets.append(diffuse_renderings[0][0])
-            rendered_diffuse_images_outputs.append(diffuse_renderings[1][0])
-
-        rendered_specular_images_targets = []
-        rendered_specular_images_outputs = []
-    
-        for _ in range(self.nb_specular_rendering):
-            specular_renderings = generate_specular_rendering(batch_size=batch_size, surface_array=self._create_surface_array(1), targets=target, outputs=output, render_fn=self.renderer.render, include_diffuse=True)
-            rendered_specular_images_targets.append(specular_renderings[0][0])
-            rendered_specular_images_outputs.append(specular_renderings[1][0])
-
-
-        rerendered_targets = torch.cat(rendered_diffuse_images_targets + rendered_specular_images_targets, dim=-1)
-        rerendered_outputs = torch.cat(rendered_diffuse_images_outputs + rendered_specular_images_outputs, dim=-1)
-
-        if self.loss_type == "render":
-            gen_loss = F.l1_loss(torch.log(rerendered_targets + 0.01), torch.log(rerendered_outputs + 0.01))
-        elif self.loss_type == "renderL2":
-            gen_loss = F.mse_loss(torch.log(rerendered_targets + 0.01), torch.log(rerendered_outputs + 0.01))
-        else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
-
-        return gen_loss
-    
-    def _create_surface_array(self, crop_size: int) -> torch.Tensor:
-        x_surface = torch.linspace(-1.0, 1.0, steps=crop_size).unsqueeze(-1).repeat(1, crop_size)
-    
-        y_surface = -1 * x_surface.t()
         
-        x_surface = x_surface.unsqueeze(-1)
-        y_surface = y_surface.unsqueeze(-1)
-        
-        z_surface = torch.zeros((crop_size, crop_size, 1), dtype=torch.float32)
-
-        surface_array = torch.cat([x_surface, y_surface, z_surface], dim=-1).unsqueeze(0).permute(0, 3, 1, 2)
-        return surface_array
-
-
-
-class MixedLoss(nn.Module):
-    def __init__(self, renderer, l1_weight = 0.1, l2_weight = 0.05):
-        super(MixedLoss, self).__init__()    
         self.renderer = renderer
-
-        # l1_weight scales the contribution of the SVBRDFL1Loss to the total loss
-        self.l1_weight = l1_weight
-         # l2_weight scales the contribution of the SVBRDFL1Loss to the total loss
-        self.l2_weight = l2_weight
-        self.l1_loss = SVBRDFL1Loss()
-        self.l2_loss = SVBRDFL2Loss()
-        self.rendering_loss = RenderingLoss(self.renderer)
+        self.random_configuration_count   = 3
+        self.specular_configuration_count = 6
 
     def forward(self, output, target):
-        l1 = self.l1_loss.forward(output, target)
-        l2 = self.l2_loss.forward(output, target)
-        rendering = self.rendering_loss.forward(output, target)
-        #print("TOTAL LOSS INSIDE MIXED LOSS: ", self.l1_weight * l1 + self.l2_weight * l2 + rendering)
-        return self.l1_weight * l1 + self.l2_weight * l2 + rendering
+        batch_size = output.shape[0]
 
+        batch_output_renderings = []
+        batch_target_renderings = []
+        for i in range(batch_size):
+            scenes = scene.generate_random_scenes(self.random_configuration_count) + \
+                     scene.generate_specular_scenes(self.specular_configuration_count)
+            
+            output_svbrdf = output[i]
+            target_svbrdf = target[i]
+            output_renderings = []
+            target_renderings = []
 
-if __name__ == "__main__":
-    # Test the losses
-    batch_size = 4
-    output = torch.rand(batch_size, 12, 256, 256)
-    target = torch.rand(batch_size, 12, 256, 256)
+            for scene in scenes:
+                output_renderings.append(self.renderer.render(scene, output_svbrdf))
+                target_renderings.append(self.renderer.render(scene, target_svbrdf))
+            batch_output_renderings.append(torch.cat(output_renderings, dim=0))
+            batch_target_renderings.append(torch.cat(target_renderings, dim=0))
 
+        epsilon_render = 1e-3
 
-    
-    l1_loss = SVBRDFL1Loss()
-    loss = l1_loss.forward(output, target)
-    print(loss)
+        batch_output_renderings_logged = torch.log(torch.stack(batch_output_renderings, dim=0) + epsilon_render)
+        batch_target_renderings_logged = torch.log(torch.stack(batch_target_renderings, dim=0) + epsilon_render)
 
-    l2_loss = SVBRDFL2Loss()
-    loss = l2_loss.forward(output, target)
-    print(loss)
+        return nn.functional.l1_loss(batch_output_renderings_logged, batch_target_renderings_logged)
 
-    from renderer import Renderer
-    rendering_loss = RenderingLoss(Renderer())
-    loss = rendering_loss.forward(output, target)
-    print(loss)
+class MixedLoss(nn.Module):
+    def __init__(self, renderer, l1_weight = 0.1, l2_weight = 0.1):
+        super(MixedLoss, self).__init__()
 
-    mixed_loss = MixedLoss(Renderer())
-    loss = mixed_loss.forward(output, target)
-    print(loss)
+        self.l1_weight      = l1_weight
+        self.l1_loss        = SVBRDFL1Loss()
+        self.l2_weight      = l2_weight
+        self.l2_loss        = SVBRDFL2Loss()
+        self.rendering_loss = RenderingLoss(renderer)
+
+    def forward(self, output, target):
+        return  self.l1_weight * self.l1_loss(output, target) +\
+                self.l2_weight * self.l2_loss(output, target) +\
+                self.rendering_loss(output, target)
