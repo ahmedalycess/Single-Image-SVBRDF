@@ -28,7 +28,7 @@ class MaterialDataset(torch.utils.data.Dataset):
     def read_sample(self, file_path):
         
         full_image = torch.Tensor(plt.imread(file_path)).permute(2, 0, 1)
-        
+        full_image = torch.nn.functional.interpolate(full_image.unsqueeze(0), size=(self.image_size, self.image_size*5), mode='bilinear').squeeze(0)
         image_parts = torch.cat(full_image.unsqueeze(0).chunk(chunks= 5, dim=-1), 0) # [5, 3, 256, 256]
         
         input_image = image_parts[0] # [3, 256, 256]

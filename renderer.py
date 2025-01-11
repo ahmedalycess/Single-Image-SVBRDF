@@ -8,6 +8,9 @@ class LocalRenderer:
     It uses a microfacet model to compute the specular reflection and a Lambertian model for the diffuse reflection.
 
     The rendering equation is given by:
+        lambertian_term     f_d  = kd * diffuse / pi
+        specular_term       f_s  = F * G * D / (4 * VN * LN)
+        rendering           f    = f_d + f_s
 
     """
 

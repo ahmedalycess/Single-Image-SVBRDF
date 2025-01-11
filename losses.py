@@ -1,3 +1,4 @@
+import scene
 import torch
 import torch.nn as nn
 import utils
@@ -8,7 +9,7 @@ class SVBRDFL1Loss(nn.Module):
         output_normals,  output_diffuse,  output_roughness,  output_specular  = utils.unpack_svbrdf(output)
         target_normals, target_diffuse, target_roughness, target_specular = utils.unpack_svbrdf(target)
 
-        epsilon_l1      = 1e-3
+        epsilon_l1      = 1e-2
 
         output_diffuse   = torch.log(output_diffuse   + epsilon_l1)
         output_specular  = torch.log(output_specular  + epsilon_l1)
@@ -28,7 +29,7 @@ class SVBRDFL2Loss(nn.Module):
         output_normals, output_diffuse, output_roughness, output_specular = utils.unpack_svbrdf(output)
         target_normals, target_diffuse, target_roughness, target_specular = utils.unpack_svbrdf(target)
 
-        epsilon_l2      = 1e-3
+        epsilon_l2      = 1e-2
 
         output_diffuse  = torch.log(output_diffuse  + epsilon_l2)
         output_specular = torch.log(output_specular + epsilon_l2)
@@ -57,21 +58,20 @@ class RenderingLoss(nn.Module):
         batch_output_renderings = []
         batch_target_renderings = []
         for i in range(batch_size):
-            scenes = scene.generate_random_scenes(self.random_configuration_count) + \
-                     scene.generate_specular_scenes(self.specular_configuration_count)
+            scenes = scene.generate_random_scenes(self.random_configuration_count) + scene.generate_specular_scenes(self.specular_configuration_count)
             
             output_svbrdf = output[i]
             target_svbrdf = target[i]
             output_renderings = []
             target_renderings = []
 
-            for scene in scenes:
-                output_renderings.append(self.renderer.render(scene, output_svbrdf))
-                target_renderings.append(self.renderer.render(scene, target_svbrdf))
+            for s in scenes:
+                output_renderings.append(self.renderer.render(s, output_svbrdf))
+                target_renderings.append(self.renderer.render(s, target_svbrdf))
             batch_output_renderings.append(torch.cat(output_renderings, dim=0))
             batch_target_renderings.append(torch.cat(target_renderings, dim=0))
 
-        epsilon_render = 1e-3
+        epsilon_render = 1e-2
 
         batch_output_renderings_logged = torch.log(torch.stack(batch_output_renderings, dim=0) + epsilon_render)
         batch_target_renderings_logged = torch.log(torch.stack(batch_target_renderings, dim=0) + epsilon_render)
